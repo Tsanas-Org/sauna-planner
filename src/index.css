@@ -1,0 +1,22 @@
+/* page base + the few layout utility classes the planner uses (Tailwind names, so the component also
+   drops into a Tailwind project unchanged) */
+html, body, #root { margin: 0; height: 100%; background: #17120e; }
+*, *::before, *::after { box-sizing: border-box; }
+
+.w-full { width: 100%; }
+.h-screen { height: 100vh; height: 100dvh; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.flex-1 { flex: 1 1 0%; }
+.flex-wrap { flex-wrap: wrap; }
+.shrink-0 { flex-shrink: 0; }
+.items-baseline { align-items: baseline; }
+.gap-4 { gap: 1rem; }
+.min-h-0 { min-height: 0; }
+.relative { position: relative; }
+.absolute { position: absolute; }
+.inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+.overflow-hidden { overflow: hidden; }
+.overflow-y-auto { overflow-y: auto; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }

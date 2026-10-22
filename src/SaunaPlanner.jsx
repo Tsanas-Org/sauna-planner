@@ -418,7 +418,7 @@ const PLAN_THEMES = {
 // nearest 1/4", written as on US drawings (5'-6 3/4", inches alone under a foot); plain ' " and x/4 fractions
 // stay legible at small sizes, unlike the ′ ″ ¾ glyphs
 const M_PER_IN = 0.0254;
-const quarterInches = (m) => Math.round((Math.abs(m) / M_PER_IN) * 4);
+const quarterInches = (m) => Math.round((Math.abs(m) / M_PER_IN) * 4 + 1e-7);
 const fmtQuarter = (q) => {
   const ft = Math.floor(q / 48), r = q - ft * 48;
   const inch = Math.floor(r / 4), frac = ["", "1/4", "1/2", "3/4"][r % 4];
@@ -427,8 +427,9 @@ const fmtQuarter = (q) => {
   return ft ? `${ft}'-${ins}` : ins;
 };
 const fmtImperial = (m) => fmtQuarter(quarterInches(m));
-// metres to 2 decimals; computed lengths are snapped to the µm first, so 1.365 − 0.9 (0.46499999…) shows as 0.47
-const toCm2 = (m) => (Math.round(Math.abs(m) * 1e6) / 1e6).toFixed(2);
+// metres to 2 decimals, halves rounded up: a hair of slack absorbs binary float error, so 1.365 (stored as
+// 1.36499999…) and 1.70 − 0.335 both show as 1.37
+const toCm2 = (m) => (Math.round(Math.abs(m) * 100 + 1e-7) / 100).toFixed(2);
 const fmtMetric = (m) => `${toCm2(m)} m`;
 const PZ0 = { z: 1, cx: 0, cy: 0 };
 // visible viewBox for a base (fit-to-view) box, zoom level and pan offset (metres)
@@ -812,6 +813,22 @@ export default function SaunaPlanner() {
     const rights = level.filter((r) => r.wall === "right").map((r) => r.x0);
     if (lefts.length && ox0 - Math.max(...lefts) > 0.02) heaterGaps.push({ z: hz, x0: Math.max(...lefts), x1: ox0 });
     if (rights.length && Math.min(...rights) - ox1 > 0.02) heaterGaps.push({ z: hz, x0: ox1, x1: Math.min(...rights) });
+  }
+  // free floor from the heater (or its railing) straight back to the back benches — their lowest tier there —
+  // when nothing else stands in between (a bench overlapping the heater there means no free floor at all)
+  let heaterBackGap = null;
+  {
+    const edge = railOn ? railFoot.z1 : hz + hPlanZ; // the heater's side facing the back wall
+    const behind = planRects.filter((r) => r.z1 > r.z0 && r.x0 <= hx && r.x1 >= hx && r.z1 > edge + 1e-6)
+      .sort((a, b) => a.z0 - b.z0);
+    if (behind.length && behind[0].wall === "back" && behind[0].z0 - edge > 0.02) heaterBackGap = { x: hx, z0: edge, z1: behind[0].z0 };
+  }
+  // free floor from the heater (or its railing) straight to the door wall, when no bench stands in between
+  let heaterDoorGap = null;
+  {
+    const edge = railOn ? railFoot.z0 : hz - hPlanZ; // the heater's side facing the door wall
+    const blocked = planRects.some((r) => r.z1 > r.z0 && r.x0 <= hx && r.x1 >= hx && r.z0 < edge - 1e-6);
+    if (!blocked && edge > 0.02) heaterDoorGap = { x: hx, z0: 0, z1: edge };
   }
   // free floor from the door wall to the front of the back benches (skipped if the heater blocks the way)
   let depthFree = null;
@@ -1788,7 +1805,7 @@ export default function SaunaPlanner() {
     const yC = D + T + p.doorW + pm(24);
     // whole centimetres (quarter inches), the right segment taking the remainder, so the shown numbers always
     // sum to the shown width
-    // (the total is rounded like the width's own label: 2.335 shows as 2.33, though 2.335 × 100 rounds to 234)
+    // (the total is rounded exactly like the width's own label)
     const cmL = Math.round(dX0 * 100), cmD = Math.round(p.doorW * 100), cmR = Math.round(+toCm2(W) * 100) - cmL - cmD;
     const qL = quarterInches(dX0), qD = quarterInches(p.doorW), qR = quarterInches(W) - qL - qD;
     const chainSegs = [
@@ -1853,6 +1870,31 @@ export default function SaunaPlanner() {
       acrossSpans.push([g.z, Math.min(g.x0, c - textLen / 2), Math.max(g.x1, c + textLen / 2)]);
       dims.push(dim(g.x0, Y(g.z), g.x1, Y(g.z), L, C.free, C.floor, "fa" + i, (c - g.x0) / L, "free ", side));
     });
+    // heater → back benches, straight behind the heater
+    if (heaterBackGap) {
+      const g = heaterBackGap, L = g.z1 - g.z0;
+      // sharing its line with the heater-to-back-wall dimension, its number goes on the other side of it
+      const shared = hzOn && hzWall === D;
+      const side = !shared ? 0 : two ? (hxWall > hx ? 1 : -1) : 1;
+      // centred, or moved toward the benches when the gap is too short, so it stays off the heater
+      const textLen = pm(Math.max(...unitLines(L, "free ").map((t) => t.length)) * 6.7);
+      const c = Math.max((g.z0 + g.z1) / 2, g.z0 + pm(2) + textLen / 2); // label centre (room z)
+      // the line runs from the benches (top) down to the heater; at counts from the top
+      dims.push(dim(g.x, Y(g.z1), g.x, Y(g.z0), L, C.free, C.floor, "fb", (g.z1 - c) / L, "free ", side));
+    }
+    // heater → door wall, straight in front of the heater. When it shares its line with the heater-to-door-wall
+    // dimension, the two numbers go on either side of it: this one away from the heater-to-side-wall dimension
+    // (or the nearer side wall), the other toward it — it stays below the heater's centre, clear of that one
+    const awayX = hxOn ? (hxWall > hx ? -1 : 1) : hx > W / 2 ? -1 : 1;
+    const doorShared = !!heaterDoorGap && hzOn && hzWall === 0;
+    if (heaterDoorGap) {
+      const g = heaterDoorGap, L = g.z1 - g.z0;
+      const side = doorShared ? awayX : 0;
+      // centred, or moved in toward the heater when the gap is too short — never out past the door wall
+      const textLen = pm(Math.max(...unitLines(L, "free ").map((t) => t.length)) * 6.7);
+      const c = Math.max(L / 2, pm(2) + textLen / 2); // label centre, as distance from the door wall
+      dims.push(dim(g.x, Y(g.z1), g.x, Y(g.z0), L, C.free, C.floor, "fdw", (g.z1 - c) / L, "free ", side));
+    }
     if (depthFree) {
       // runs from the back benches' front (top) down to the door wall. Its label stays mid-line unless that
       // meets the label of a line crossing it — the free floor across, the heater-to-side-wall one; then it goes
@@ -1888,7 +1930,7 @@ export default function SaunaPlanner() {
         freeAt(Math.abs(hx - hxWall), hPlanX, hxWall > hx), "", two ? (hzWall === 0 ? -1 : 1) : 0));
     if (hzOn)
       dims.push(dim(hx, Math.min(Y(hz), Y(hzWall)), hx, Math.max(Y(hz), Y(hzWall)), Math.abs(hz - hzWall), C.ember, C.floor, "hz",
-        freeAt(Math.abs(hz - hzWall), hPlanZ, hzWall === 0), "", two ? (hxWall > hx ? -1 : 1) : 0));
+        freeAt(Math.abs(hz - hzWall), hPlanZ, hzWall === 0), "", doorShared ? -awayX : two ? (hxWall > hx ? -1 : 1) : 0));
 
     // wall names; DOOR WALL sits just below the wall in the wider wall segment (clear of the extension
     // lines), or centred below the chain when neither segment has room
